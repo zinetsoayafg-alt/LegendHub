@@ -1,0 +1,426 @@
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Create project
+        run: |
+          cat > settings.gradle.kts <<'EOF_FILE'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "LegendHub"
+          include(":app")
+          EOF_FILE
+          cat > build.gradle.kts <<'EOF_FILE'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF_FILE
+          cat > gradle.properties <<'EOF_FILE'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF_FILE
+          mkdir -p app
+          cat > app/build.gradle.kts <<'EOF_FILE'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.legend.hub"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.legend.hub"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.activity:activity-compose:1.9.0")
+              implementation("androidx.core:core-ktx:1.13.1")
+          }
+          EOF_FILE
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+              <application
+                  android:label="Legend Hub"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="${applicationId}.fp"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths" />
+                  </provider>
+              </application>
+          </manifest>
+          EOF_FILE
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/file_paths.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-files-path name="imports" path="imports/" />
+          </paths>
+          EOF_FILE
+          mkdir -p app/src/main/java/com/legend/hub
+          cat > app/src/main/java/com/legend/hub/MainActivity.kt <<'EOF_FILE'
+          @file:OptIn(ExperimentalFoundationApi::class)
+
+          package com.legend.hub
+
+          import android.content.ActivityNotFoundException
+          import android.content.Context
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.provider.OpenableColumns
+          import android.webkit.MimeTypeMap
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.compose.setContent
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.ExperimentalFoundationApi
+          import androidx.compose.foundation.Image
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.combinedClickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.LazyRow
+          import androidx.compose.foundation.lazy.grid.GridCells
+          import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+          import androidx.compose.foundation.lazy.grid.items
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.ImageBitmap
+          import androidx.compose.ui.graphics.asImageBitmap
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.content.FileProvider
+          import androidx.core.graphics.drawable.toBitmap
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+          import java.io.File
+
+          private val BG = Color(0xFF07070F)
+          private val Purple = Color(0xFF8B5CF6)
+          private val Cyan = Color(0xFF22D3EE)
+          private val Pink = Color(0xFFF472B6)
+          private val Card = Color(0xFF12122A)
+          private val AVATARS = listOf("🦅", "🐉", "🔥", "👾", "🐺", "⚡")
+          private val PPSSPP_PKGS = listOf("org.ppsspp.ppssppgold", "org.ppsspp.ppsspp")
+
+          data class AppItem(val pkg: String, val label: String, val icon: ImageBitmap)
+          data class PspGame(val uri: String, val name: String)
+          data class Recent(val last: Long, val title: String, val icon: ImageBitmap?, val click: () -> Unit)
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent {
+                      MaterialTheme(
+                          colorScheme = darkColorScheme(primary = Purple, secondary = Cyan, background = BG, surface = Card)
+                      ) { Root() }
+                  }
+              }
+          }
+
+          // ---------- storage ----------
+          private fun prefs(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE)
+          private fun getUser(c: Context) = prefs(c).getString("user", "") ?: ""
+          private fun getAvatar(c: Context) = prefs(c).getString("avatar", AVATARS[0]) ?: AVATARS[0]
+          private fun saveUser(c: Context, n: String, a: String) {
+              prefs(c).edit().putString("user", n).putString("avatar", a).apply()
+          }
+
+          private fun getSaved(c: Context): Set<String> = HashSet(prefs(c).getStringSet("games", emptySet()) ?: emptySet())
+          private fun putSaved(c: Context, s: Set<String>) {
+              prefs(c).edit().putStringSet("games", HashSet(s)).apply()
+          }
+
+          private fun getPsp(c: Context): List<PspGame> =
+              (prefs(c).getStringSet("psp", emptySet()) ?: emptySet()).mapNotNull {
+                  val i = it.indexOf('¦')
+                  if (i < 0) null else PspGame(it.substring(0, i), it.substring(i + 1))
+              }.sortedBy { it.name.lowercase() }
+
+          private fun putPsp(c: Context, l: List<PspGame>) {
+              prefs(c).edit().putStringSet("psp", HashSet(l.map { "${it.uri}¦${it.name}" })).apply()
+          }
+
+          private fun plays(c: Context, key: String) = prefs(c).getInt("p_$key", 0)
+          private fun lastPlayed(c: Context, key: String) = prefs(c).getLong("l_$key", 0L)
+          private fun addPlay(c: Context, key: String) {
+              prefs(c).edit().putInt("p_$key", plays(c, key) + 1).putLong("l_$key", System.currentTimeMillis()).apply()
+          }
+
+          private fun totalPlays(c: Context) =
+              prefs(c).all.filterKeys { it.startsWith("p_") }.values.sumOf { (it as? Int) ?: 0 }
+
+          private fun resetStats(c: Context) {
+              val e = prefs(c).edit()
+              prefs(c).all.keys.filter { it.startsWith("p_") || it.startsWith("l_") }.forEach { e.remove(it) }
+              e.apply()
+          }
+
+          // ---------- system ----------
+          private fun loadApps(ctx: Context): List<AppItem> {
+              val pm = ctx.packageManager
+              val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+              return pm.queryIntentActivities(intent, 0)
+                  .map {
+                      AppItem(
+                          it.activityInfo.packageName,
+                          it.loadLabel(pm).toString(),
+                          it.loadIcon(pm).toBitmap(96, 96).asImageBitmap()
+                      )
+                  }
+                  .filter { it.pkg != ctx.packageName }
+                  .distinctBy { it.pkg }
+                  .sortedBy { it.label.lowercase() }
+          }
+
+          private fun queryName(ctx: Context, uri: Uri): String {
+              var name = "file_${System.currentTimeMillis()}"
+              ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                  val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                  if (i >= 0 && c.moveToFirst()) name = c.getString(i)
+              }
+              return name
+          }
+
+          private fun importDir(ctx: Context): File =
+              File(ctx.getExternalFilesDir(null), "imports").also { it.mkdirs() }
+
+          private fun copyUri(ctx: Context, uri: Uri) {
+              val name = queryName(ctx, uri)
+              ctx.contentResolver.openInputStream(uri)?.use { input ->
+                  File(importDir(ctx), name).outputStream().use { input.copyTo(it) }
+              }
+          }
+
+          private fun openFile(ctx: Context, f: File) {
+              try {
+                  val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fp", f)
+                  val ext = f.extension.lowercase()
+                  val mime = if (ext == "apk") "application/vnd.android.package-archive"
+                  else MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+                  ctx.startActivity(
+                      Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+                          .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                  )
+              } catch (e: Exception) {
+                  Toast.makeText(ctx, "تعذر الفتح: ${e.message}", Toast.LENGTH_LONG).show()
+              }
+          }
+
+          private fun ppssppPkg(c: Context): String? = PPSSPP_PKGS.firstOrNull {
+              try {
+                  c.packageManager.getPackageInfo(it, 0); true
+              } catch (e: Exception) {
+                  false
+              }
+          }
+
+          private fun installPpsspp(c: Context) {
+              c.startActivity(
+                  Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=org.ppsspp.ppsspp"))
+                      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+              )
+          }
+
+          private fun launchPsp(c: Context, g: PspGame) {
+              val pkg = ppssppPkg(c)
+              if (pkg == null) {
+                  Toast.makeText(c, "ثبّت PPSSPP أولاً", Toast.LENGTH_LONG).show()
+                  installPpsspp(c)
+                  return
+              }
+              val uri = Uri.parse(g.uri)
+              val type = c.contentResolver.getType(uri) ?: "application/octet-stream"
+              val base = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
+                  .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+              try {
+                  c.startActivity(Intent(base).setPackage(pkg))
+                  addPlay(c, "p:${g.uri}")
+              } catch (e: ActivityNotFoundException) {
+                  try {
+                      c.startActivity(Intent.createChooser(base, "افتح اللعبة بـ PPSSPP").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                      addPlay(c, "p:${g.uri}")
+                  } catch (e2: Exception) {
+                      c.packageManager.getLaunchIntentForPackage(pkg)?.let { c.startActivity(it) }
+                      Toast.makeText(c, "افتح اللعبة من داخل PPSSPP", Toast.LENGTH_LONG).show()
+                  }
+              } catch (e: SecurityException) {
+                  Toast.makeText(c, "أعد إضافة اللعبة (صلاحية الملف انتهت)", Toast.LENGTH_LONG).show()
+              }
+          }
+
+          // ---------- root ----------
+          @Composable
+          fun Root() {
+              val ctx = LocalContext.current
+              var name by remember { mutableStateOf(getUser(ctx)) }
+              var avatar by remember { mutableStateOf(getAvatar(ctx)) }
+              if (name.isBlank()) {
+                  Onboarding { n, a ->
+                      saveUser(ctx, n, a); name = n; avatar = a
+                  }
+              } else {
+                  HubApp(name, avatar) { n, a ->
+                      saveUser(ctx, n, a); name = n; avatar = a
+                  }
+              }
+          }
+
+          @Composable
+          fun AvatarPicker(selected: String, onSelect: (String) -> Unit) {
+              Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                  AVATARS.forEach { a ->
+                      Box(
+                          Modifier
+                              .size(44.dp)
+                              .clip(CircleShape)
+                              .background(Card)
+                              .border(2.dp, if (a == selected) Cyan else Color.Transparent, CircleShape)
+                              .clickable { onSelect(a) },
+                          contentAlignment = Alignment.Center
+                      ) { Text(a, fontSize = 22.sp) }
+                  }
+              }
+          }
+
+          @Composable
+          fun Onboarding(onDone: (String, String) -> Unit) {
+              var n by remember { mutableStateOf("") }
+              var a by remember { mutableStateOf(AVATARS[0]) }
+              Column(
+                  Modifier
+                      .fillMaxSize()
+                      .background(Brush.verticalGradient(listOf(Color(0xFF1E0B5A), BG)))
+                      .padding(28.dp),
+                  verticalArrangement = Arrangement.Center,
+                  horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                  Text("LEGEND HUB", fontSize = 36.sp, fontWeight = FontWeight.Black, color = Cyan)
+                  Spacer(Modifier.height(6.dp))
+                  Text("مركز ألعابك الأسطوري", color = Color.Gray)
+                  Spacer(Modifier.height(32.dp))
+                  Box(
+                      Modifier.size(96.dp).clip(CircleShape)
+                          .background(Brush.linearGradient(listOf(Purple, Pink))),
+                      contentAlignment = Alignment.Center
+                  ) { Text(a, fontSize = 48.sp) }
+                  Spacer(Modifier.height(20.dp))
+                  AvatarPicker(a) { a = it }
+                  Spacer(Modifier.height(24.dp))
+                  OutlinedTextField(
+                      value = n, onValueChange = { if (it.length <= 16) n = it },
+                      label = { Text("اسم المستخدم") }, singleLine = true,
+                      modifier = Modifier.fillMaxWidth()
+                  )
+                  Spacer(Modifier.height(20.dp))
+                  Button(
+                      onClick = { onDone(n.trim(), a) },
+                      enabled = n.isNotBlank(),
+                      modifier = Modifier.fillMaxWidth().height(52.dp),
+                      colors = ButtonDefaults.buttonColors(containerColor = Purple)
+                  ) { Text("ابدأ", fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+              }
+          }
+
+          @Composable
+          fun HubApp(name: String, avatar: String, onProfile: (String, String) -> Unit) {
+              val ctx = LocalContext.current
+              val scope = rememberCoroutineScope()
+              var tab by remember { mutableIntStateOf(0) }
+              var tick by remember { mutableIntStateOf(0) }
+              var apps by remember { mutableStateOf(emptyList<AppItem>()) }
+              var saved by remember { mutableStateOf(getSaved(ctx)) }
+              var psp by remember { mutableStateOf(getPsp(ctx)) }
+              var files by remember { mutableStateOf(importDir(ctx).listFiles()?.toList() ?: emptyList()) }
+
+              LaunchedEffect(tab) { apps = withContext(Dispatchers.Default) { loadApps(ctx) } }
+
+              val launchMobile: (String) -> Unit = { pkg ->
+                  ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                      ctx.startActivity(it); addPlay(ctx, "m:$pkg"); tick++
+                  }
+              }
+              val launchPspGame: (PspGame) -> Unit = { g -> launchPsp(ctx, g); tick++ }
+              val titles = listOf("LEGEND HUB", "ألعاب الجوال", "PSP", "الملفات", "الملف الشخصي")
+
+              Scaffold(
+                  containerColor = BG,
+                  bottomBar = {
+                      NavigationBar(containerColor = Card) {
+                          listOf("🏠" to "الرئيسية", "📱" to "الجوال", "🎮" to "PSP", "📁" to "الملفات", "👤" to "أنا")
+                              .forEachIndexed { i, (e, l) ->
+                                  NavigationBarItem(
+                                      selected = tab == i,
+                                      onClick = { tab = i },
+                                      icon = { Text(e, fontSize = 20.sp) },
+                                      label = { Text(l, fontSize = 10.sp, maxLines = 1) },
+                                      colors = NavigationBarItemDefaults.colors(indicatorColor = Purple.copy(alpha = 0.35f))
+                                  )
+                        
